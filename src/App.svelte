@@ -9,6 +9,7 @@
     saveDoodle,
     type DoodleMeta,
   } from './lib/paint-store';
+  import { canvasToPngBlob, uploadImageBlob, detectUploadSupport } from './lib/paint-upload';
 
   const WIDTH = 480;
   const HEIGHT = 360;
@@ -33,6 +34,18 @@
   let nameInput = $state<HTMLInputElement | null>(null);
   let dialogName = $state('');
   let forkOnSave = false;
+
+  // Upload-result modal: shows the shell-returned URI for copy after NAP-UPLOAD.
+  // `uploadSupported` gates the menu item — it stays false until the shell
+  // confirms it offers the upload capability, so paint degrades gracefully
+  // (no Upload item) under a shell without NAP-UPLOAD or when served standalone.
+  let uploadSupported = $state(false);
+  let uploadDialog = $state<HTMLDialogElement | null>(null);
+  let uploadUrl = $state('');
+  let uploadFallbacks = $state<string[]>([]);
+  let uploading = $state(false);
+  let copied = $state(false);
+  let copyTimer: ReturnType<typeof setTimeout> | null = null;
 
   let tool = $state<Tool>('pencil');
   let color = $state('#000000');
@@ -60,6 +73,7 @@
     ctx = context;
     clearCanvas();
     void refreshGallery();
+    void detectUploadSupport().then((ok) => (uploadSupported = ok));
 
     window.addEventListener('keydown', onWindowKeydown);
     window.addEventListener('pointerdown', onWindowPointerDown, true);
@@ -294,6 +308,64 @@
     a.click();
   }
 
+  function exportFilename(): string {
+    return `${(name.trim() || 'doodle').replace(/[^a-z0-9-_]+/gi, '-')}.png`;
+  }
+
+  // Hand PNG bytes to the shell (NAP-UPLOAD); show the returned URI for copy.
+  async function uploadImage(): Promise<void> {
+    if (!canvas || busy || uploading) return;
+    if (!uploadSupported) {
+      notify('Uploading is not available in this shell', 'error');
+      return;
+    }
+    uploading = true;
+    busy = true;
+    message = null;
+    notify('Uploading…');
+    try {
+      const blob = await canvasToPngBlob(canvas);
+      if (!blob) {
+        notify('Could not read the canvas image', 'error');
+        return;
+      }
+      const outcome = await uploadImageBlob(blob, {
+        filename: exportFilename(),
+        caption: name.trim() || undefined,
+      });
+      if (!outcome.ok || !outcome.url) {
+        notify(outcome.error ?? 'Upload failed', 'error');
+        return;
+      }
+      uploadUrl = outcome.url;
+      uploadFallbacks = outcome.fallbackUrls ?? [];
+      copied = false;
+      notify('Uploaded');
+      uploadDialog?.showModal();
+    } finally {
+      uploading = false;
+      busy = false;
+    }
+  }
+
+  async function copyUploadUrl(): Promise<void> {
+    if (!uploadUrl) return;
+    try {
+      await navigator.clipboard.writeText(uploadUrl);
+      copied = true;
+      if (copyTimer) clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => (copied = false), 1500);
+    } catch {
+      // Clipboard unavailable (denied permission / insecure context). The URL
+      // stays visible and selectable in the dialog as a manual fallback.
+      copied = false;
+    }
+  }
+
+  function closeUploadDialog(): void {
+    uploadDialog?.close();
+  }
+
   // ---- Menu bar: WAI-ARIA menubar with full keyboard support ----------------
 
   function topButtons(): HTMLButtonElement[] {
@@ -490,6 +562,18 @@
           <button type="button" class="mi" role="menuitem" onclick={() => select(exportPng)} disabled={busy}>
             <span>Export as PNG</span><span class="sc">Ctrl+E</span>
           </button>
+          {#if uploadSupported}
+            <button
+              type="button"
+              class="mi"
+              role="menuitem"
+              data-testid="upload"
+              onclick={() => select(() => void uploadImage())}
+              disabled={busy}
+            >
+              <span>{uploading ? 'Uploading…' : 'Upload…'}</span>
+            </button>
+          {/if}
 
           <div class="sep" role="separator"></div>
           <div class="menu-head" aria-hidden="true">Open saved ({doodles.length})</div>
@@ -632,6 +716,31 @@
         <button type="submit" class="dlg-btn primary" data-testid="save-confirm" disabled={busy}>Save</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog class="upload-dialog" bind:this={uploadDialog} data-testid="upload-dialog">
+    <h2 class="dlg-title">Image uploaded</h2>
+    <p class="dlg-hint">Copy this link to share or paste into another napplet.</p>
+    <div class="url-row">
+      <input
+        class="url"
+        type="text"
+        readonly
+        value={uploadUrl}
+        data-testid="upload-url"
+        aria-label="Uploaded image URL"
+        onfocus={(e) => e.currentTarget.select()}
+      />
+      <button type="button" class="dlg-btn primary" data-testid="upload-copy" onclick={copyUploadUrl}>
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </div>
+    {#if uploadFallbacks.length > 0}
+      <p class="dlg-mirrors">+{uploadFallbacks.length} mirror{uploadFallbacks.length === 1 ? '' : 's'}</p>
+    {/if}
+    <div class="dlg-actions">
+      <button type="button" class="dlg-btn" onclick={closeUploadDialog}>Close</button>
+    </div>
   </dialog>
 </div>
 
@@ -860,7 +969,8 @@
   .dims { margin-left: auto; color: var(--hg-text-muted, #b8b1a4); }
 
   /* ---- Save dialog ----------------------------------------------------- */
-  .save-dialog {
+  .save-dialog,
+  .upload-dialog {
     margin: auto;
     width: min(360px, 90vw);
     padding: 0;
@@ -870,14 +980,45 @@
     color: var(--hg-text, #f3f1e8);
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
   }
-  .save-dialog::backdrop {
+  .save-dialog::backdrop,
+  .upload-dialog::backdrop {
     background: rgba(0, 0, 0, 0.55);
   }
-  .save-dialog form {
+  .save-dialog form,
+  .upload-dialog[open] {
     display: flex;
     flex-direction: column;
     gap: 14px;
     padding: 16px;
+  }
+  .dlg-hint {
+    margin: 0;
+    font-size: 12px;
+    color: var(--hg-text-muted, #b8b1a4);
+  }
+  .url-row {
+    display: flex;
+    gap: 8px;
+  }
+  .url {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--hg-border, #303030);
+    background: var(--hg-bg, #070707);
+    color: var(--hg-text, #f3f1e8);
+    font: inherit;
+    font-size: 12px;
+    padding: 6px 8px;
+    border-radius: 3px;
+  }
+  .url:focus-visible {
+    outline: none;
+    border-color: var(--hg-accent, #9ee493);
+  }
+  .dlg-mirrors {
+    margin: 0;
+    font-size: 11px;
+    color: var(--hg-text-muted, #b8b1a4);
   }
   .dlg-title {
     margin: 0;
