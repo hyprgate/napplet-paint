@@ -4,7 +4,7 @@ import UnoCSS from '@unocss/vite';
 import { nip5aManifest } from '@napplet/vite-plugin';
 
 export default defineConfig({
-  plugins: [UnoCSS(), svelte(), nip5aManifest({ nappletType: 'paint', requires: ['storage', 'theme'], artifactMode: 'single-file' })],
+  plugins: [UnoCSS(), svelte(), nip5aManifest({ nappletType: 'paint', requires: ['storage', 'theme', 'upload'], artifactMode: 'single-file' })],
   resolve: {
     dedupe: ['svelte'],
   },
