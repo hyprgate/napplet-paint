@@ -294,6 +294,86 @@
     a.click();
   }
 
+  // ---- Clipboard: copy/paste the canvas bitmap ------------------------------
+  //
+  // These call the browser-native async Clipboard API directly. Inside the
+  // shell's opaque-origin sandbox (no `allow-same-origin`, no `allow=` Permissions
+  // Policy, `connect-src 'none'`) the API is frequently unavailable — `read()`
+  // in particular cannot be granted to an opaque origin — so every path is
+  // feature-detected and wrapped: a blocked clipboard surfaces a friendly status
+  // message instead of throwing. When a `clipboard` NAP domain lands, the real
+  // I/O should move to the shell (trusted top-level origin) and be proxied in
+  // over postMessage, exactly like NAP-STORAGE; these two functions are the seam.
+
+  function canvasToBlob(): Promise<Blob | null> {
+    return new Promise((resolve) => {
+      if (!canvas) return resolve(null);
+      canvas.toBlob((blob) => resolve(blob), 'image/png');
+    });
+  }
+
+  async function copyImage(): Promise<void> {
+    if (!canvas || busy) return;
+    if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+      notify('Clipboard copy is not available in this runtime', 'error');
+      return;
+    }
+    try {
+      const blob = await canvasToBlob();
+      if (!blob) {
+        notify('Could not read the canvas image', 'error');
+        return;
+      }
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      notify('Image copied to clipboard');
+    } catch {
+      notify('Clipboard write was blocked by the runtime', 'error');
+    }
+  }
+
+  // Composite a pasted image over the current artwork at its native size,
+  // top-left — matching classic Paint paste (overlay, not replace).
+  function drawImageOverlay(src: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        ctx?.drawImage(img, 0, 0);
+        resolve(true);
+      };
+      img.onerror = () => resolve(false);
+      img.src = src;
+    });
+  }
+
+  async function pasteImage(): Promise<void> {
+    if (!ctx || busy) return;
+    if (!navigator.clipboard?.read) {
+      notify('Clipboard paste is not available in this runtime', 'error');
+      return;
+    }
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find((t) => t.startsWith('image/'));
+        if (!type) continue;
+        const blob = await item.getType(type);
+        const url = URL.createObjectURL(blob);
+        const ok = await drawImageOverlay(url);
+        URL.revokeObjectURL(url);
+        if (ok) {
+          dirty = true;
+          notify('Pasted image from clipboard');
+        } else {
+          notify('Could not decode the pasted image', 'error');
+        }
+        return;
+      }
+      notify('No image found on the clipboard', 'error');
+    } catch {
+      notify('Clipboard read was blocked by the runtime', 'error');
+    }
+  }
+
   // ---- Menu bar: WAI-ARIA menubar with full keyboard support ----------------
 
   function topButtons(): HTMLButtonElement[] {
@@ -442,6 +522,23 @@
         exportPng();
         return;
       }
+      // Copy/paste the canvas — but never hijack a real text field (e.g. the
+      // save-name dialog), where Ctrl+C/V must do ordinary text editing.
+      const el = event.target as HTMLElement | null;
+      const inField =
+        !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+      if (key === 'c' && !inField) {
+        event.preventDefault();
+        closeMenu();
+        void copyImage();
+        return;
+      }
+      if (key === 'v' && !inField) {
+        event.preventDefault();
+        closeMenu();
+        void pasteImage();
+        return;
+      }
     }
     if (event.key === 'Escape' && openMenu) {
       closeMenu();
@@ -534,15 +631,45 @@
       <button
         type="button"
         class="top"
+        class:open={openMenu === 'edit'}
+        role="menuitem"
+        aria-haspopup="menu"
+        aria-expanded={openMenu === 'edit'}
+        data-menu="edit"
+        tabindex={activeTop === 1 ? 0 : -1}
+        onclick={() => toggleMenu('edit')}
+        onkeydown={(e) => onTopKeydown(e, 'edit', 1)}
+        onfocus={() => (activeTop = 1)}
+        onmouseenter={() => openMenu && (openMenu = 'edit')}
+      >
+        Edit
+      </button>
+
+      {#if openMenu === 'edit'}
+        <div class="menu" role="menu" aria-label="Edit" tabindex="-1" data-menu-panel="edit" onkeydown={onPanelKeydown}>
+          <button type="button" class="mi" role="menuitem" data-testid="copy" onclick={() => select(copyImage)} disabled={busy}>
+            <span>Copy image</span><span class="sc">Ctrl+C</span>
+          </button>
+          <button type="button" class="mi" role="menuitem" data-testid="paste" onclick={() => select(pasteImage)} disabled={busy}>
+            <span>Paste image</span><span class="sc">Ctrl+V</span>
+          </button>
+        </div>
+      {/if}
+    </div>
+
+    <div class="menu-wrap">
+      <button
+        type="button"
+        class="top"
         class:open={openMenu === 'image'}
         role="menuitem"
         aria-haspopup="menu"
         aria-expanded={openMenu === 'image'}
         data-menu="image"
-        tabindex={activeTop === 1 ? 0 : -1}
+        tabindex={activeTop === 2 ? 0 : -1}
         onclick={() => toggleMenu('image')}
-        onkeydown={(e) => onTopKeydown(e, 'image', 1)}
-        onfocus={() => (activeTop = 1)}
+        onkeydown={(e) => onTopKeydown(e, 'image', 2)}
+        onfocus={() => (activeTop = 2)}
         onmouseenter={() => openMenu && (openMenu = 'image')}
       >
         Image

@@ -17,7 +17,19 @@ keyboard-accessible WAI-ARIA `menubar`:
 
 - **File** — New, Save (`Ctrl+S`), Save As…, Export as PNG (`Ctrl+E`), and the
   **Open saved** list of stored doodles (load or delete each).
+- **Edit** — Copy image (`Ctrl+C`) and Paste image (`Ctrl+V`). Copy puts the whole
+  canvas on the system clipboard as a PNG; Paste composites a clipboard image over
+  the current artwork at the top-left.
 - **Image** — Clear Image.
+
+> Copy/Paste call the browser-native async Clipboard API directly. Inside the
+> shell's opaque-origin sandbox (no `allow-same-origin`, `connect-src 'none'`) the
+> API is frequently unavailable — `read()`/paste in particular cannot be granted to
+> an opaque origin — so each path is feature-detected and a blocked clipboard
+> surfaces a status message instead of throwing. When a `clipboard` NAP domain
+> lands, the real I/O should move to the shell (trusted top-level origin) and be
+> proxied in over postMessage like NAP-STORAGE; `copyImage`/`pasteImage` in
+> `src/App.svelte` are the single seam to swap.
 
 Saving an unsaved doodle (or **Save As…**) opens a modal name dialog rather than
 a persistent footer field; an already-named doodle re-saves in place. The dialog
@@ -25,7 +37,8 @@ is a native `<dialog>` (focus-trapped, `Esc` to cancel, `Enter` to confirm).
 
 Keyboard support: `Tab` reaches the bar, `←`/`→` move between menus, `↓`/`Enter`/
 `Space` open a menu, `↑`/`↓`/`Home`/`End` move between items, `Enter` activates,
-and `Esc` closes the dropdown. `Ctrl+S` and `Ctrl+E` work globally.
+and `Esc` closes the dropdown. `Ctrl+S`, `Ctrl+E`, `Ctrl+C`, and `Ctrl+V` work
+globally (clipboard shortcuts defer to normal text editing while a field is focused).
 
 ## Persistence
 
