@@ -17,10 +17,15 @@ keyboard-accessible WAI-ARIA `menubar`:
 
 - **File** — New, Save (`Ctrl+S`), Save As…, Export as PNG (`Ctrl+E`), and the
   **Open saved** list of stored doodles (load or delete each).
-- **Edit** — Copy image (`Ctrl+C`) and Paste image (`Ctrl+V`). Copy puts the whole
-  canvas on the system clipboard as a PNG; Paste composites a clipboard image over
-  the current artwork at the top-left.
+- **Edit** — Undo (`Ctrl+Z`), Redo (`Ctrl+Y` or `Ctrl+Shift+Z`), Copy image
+  (`Ctrl+C`), and Paste image (`Ctrl+V`). Copy puts the whole canvas on the system
+  clipboard as a PNG; Paste composites a clipboard image over the current artwork,
+  centered under the cursor (or the canvas center when pasted from the menu).
 - **Image** — Clear Image.
+
+Undo/redo is in-memory only and keeps the last 10 steps. Each freehand stroke,
+fill, paste, and **Clear Image** is one step; opening **New** or a saved doodle
+resets the history.
 
 > Copy/Paste call the browser-native async Clipboard API directly. Inside the
 > shell's opaque-origin sandbox (no `allow-same-origin`, `connect-src 'none'`) the
@@ -37,8 +42,9 @@ is a native `<dialog>` (focus-trapped, `Esc` to cancel, `Enter` to confirm).
 
 Keyboard support: `Tab` reaches the bar, `←`/`→` move between menus, `↓`/`Enter`/
 `Space` open a menu, `↑`/`↓`/`Home`/`End` move between items, `Enter` activates,
-and `Esc` closes the dropdown. `Ctrl+S`, `Ctrl+E`, `Ctrl+C`, and `Ctrl+V` work
-globally (clipboard shortcuts defer to normal text editing while a field is focused).
+and `Esc` closes the dropdown. `Ctrl+S`, `Ctrl+E`, `Ctrl+Z`, `Ctrl+Y`, `Ctrl+C`,
+and `Ctrl+V` work globally (the edit/clipboard shortcuts defer to normal text
+editing while a field is focused).
 
 ## Persistence
 

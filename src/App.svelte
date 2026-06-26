@@ -55,6 +55,25 @@
   let lastX = 0;
   let lastY = 0;
 
+  // Last pointer position in canvas space, tracked so a paste can be centered
+  // under the cursor. `cursorOnCanvas` is false until the pointer is over the
+  // canvas (e.g. a paste from the menu), in which case paste falls back to the
+  // canvas center.
+  let cursorX = 0;
+  let cursorY = 0;
+  let cursorOnCanvas = false;
+
+  // In-memory undo/redo, MS Paint-style. Each entry is a full-canvas ImageData
+  // snapshot of the state *before* a committed edit; the undo stack is capped at
+  // MAX_HISTORY levels. `pendingBefore` holds the pre-stroke snapshot for the
+  // duration of a freehand stroke so a whole stroke is a single undo step.
+  const MAX_HISTORY = 10;
+  let undoStack = $state<ImageData[]>([]);
+  let redoStack = $state<ImageData[]>([]);
+  let pendingBefore: ImageData | null = null;
+  const canUndo = $derived(undoStack.length > 0);
+  const canRedo = $derived(redoStack.length > 0);
+
   onMount(() => {
     const context = canvas?.getContext('2d', { willReadFrequently: true }) ?? null;
     ctx = context;
@@ -85,6 +104,7 @@
 
   function newCanvas(): void {
     clearCanvas();
+    resetHistory();
     currentId = null;
     name = '';
     dirty = false;
@@ -92,9 +112,53 @@
   }
 
   function clearArtwork(): void {
+    const before = snapshot();
     clearCanvas();
+    commit(before);
     dirty = true;
     notify('Canvas cleared');
+  }
+
+  // ---- Undo / redo ----------------------------------------------------------
+
+  function snapshot(): ImageData | null {
+    return ctx ? ctx.getImageData(0, 0, WIDTH, HEIGHT) : null;
+  }
+
+  // Record a pre-edit snapshot as a new undo step and drop the redo branch.
+  function commit(before: ImageData | null): void {
+    if (!before) return;
+    undoStack.push(before);
+    if (undoStack.length > MAX_HISTORY) undoStack.shift();
+    redoStack = [];
+  }
+
+  // Forget all history (e.g. when a new/loaded document replaces the canvas).
+  function resetHistory(): void {
+    undoStack = [];
+    redoStack = [];
+    pendingBefore = null;
+  }
+
+  function undo(): void {
+    if (!ctx || undoStack.length === 0) return;
+    const current = snapshot();
+    const prev = undoStack.pop()!;
+    if (current) redoStack.push(current);
+    ctx.putImageData(prev, 0, 0);
+    dirty = true;
+  }
+
+  function redo(): void {
+    if (!ctx || redoStack.length === 0) return;
+    const current = snapshot();
+    const next = redoStack.pop()!;
+    if (current) {
+      undoStack.push(current);
+      if (undoStack.length > MAX_HISTORY) undoStack.shift();
+    }
+    ctx.putImageData(next, 0, 0);
+    dirty = true;
   }
 
   // Map a pointer event to integer canvas-space pixel coordinates.
@@ -133,10 +197,12 @@
 
   function bucketFill(x: number, y: number): void {
     if (!ctx) return;
+    const before = snapshot();
     const image = ctx.getImageData(0, 0, WIDTH, HEIGHT);
     const changed = floodFill(image.data, WIDTH, HEIGHT, x, y, hexToRgba(color));
     if (changed) {
       ctx.putImageData(image, 0, 0);
+      commit(before);
       dirty = true;
     }
   }
@@ -157,20 +223,31 @@
     }
     drawing = true;
     dirty = true;
+    pendingBefore = snapshot();
     lastX = x;
     lastY = y;
     dot(x, y);
   }
 
   function onPointerMove(event: PointerEvent): void {
-    if (!drawing) return;
     const { x, y } = toCanvasPoint(event);
+    cursorX = x;
+    cursorY = y;
+    cursorOnCanvas = true;
+    if (!drawing) return;
     strokeTo(x, y);
+  }
+
+  function onPointerLeave(): void {
+    cursorOnCanvas = false;
   }
 
   function endStroke(event: PointerEvent): void {
     if (!drawing) return;
     drawing = false;
+    // The whole stroke collapses into one undo step.
+    commit(pendingBefore);
+    pendingBefore = null;
     try {
       canvas?.releasePointerCapture?.(event.pointerId);
     } catch {
@@ -254,6 +331,7 @@
         return;
       }
       await drawDataUrl(dataUrl);
+      resetHistory();
       currentId = meta.id;
       name = meta.name;
       dirty = false;
@@ -332,12 +410,12 @@
   }
 
   // Composite a pasted image over the current artwork at its native size,
-  // top-left — matching classic Paint paste (overlay, not replace).
-  function drawImageOverlay(src: string): Promise<boolean> {
+  // centered on (cx, cy) — overlay, not replace.
+  function drawImageOverlay(src: string, cx: number, cy: number): Promise<boolean> {
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
-        ctx?.drawImage(img, 0, 0);
+        ctx?.drawImage(img, Math.round(cx - img.width / 2), Math.round(cy - img.height / 2));
         resolve(true);
       };
       img.onerror = () => resolve(false);
@@ -358,9 +436,13 @@
         if (!type) continue;
         const blob = await item.getType(type);
         const url = URL.createObjectURL(blob);
-        const ok = await drawImageOverlay(url);
+        const cx = cursorOnCanvas ? cursorX : WIDTH / 2;
+        const cy = cursorOnCanvas ? cursorY : HEIGHT / 2;
+        const before = snapshot();
+        const ok = await drawImageOverlay(url, cx, cy);
         URL.revokeObjectURL(url);
         if (ok) {
+          commit(before);
           dirty = true;
           notify('Pasted image from clipboard');
         } else {
@@ -539,6 +621,20 @@
         void pasteImage();
         return;
       }
+      // Undo/redo: Ctrl+Z, redo on Ctrl+Y or Ctrl+Shift+Z. Defer to text fields.
+      if (key === 'z' && !inField) {
+        event.preventDefault();
+        closeMenu();
+        if (event.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if (key === 'y' && !inField) {
+        event.preventDefault();
+        closeMenu();
+        redo();
+        return;
+      }
     }
     if (event.key === 'Escape' && openMenu) {
       closeMenu();
@@ -647,6 +743,13 @@
 
       {#if openMenu === 'edit'}
         <div class="menu" role="menu" aria-label="Edit" tabindex="-1" data-menu-panel="edit" onkeydown={onPanelKeydown}>
+          <button type="button" class="mi" role="menuitem" data-testid="undo" onclick={() => select(undo)} disabled={busy || !canUndo}>
+            <span>Undo</span><span class="sc">Ctrl+Z</span>
+          </button>
+          <button type="button" class="mi" role="menuitem" data-testid="redo" onclick={() => select(redo)} disabled={busy || !canRedo}>
+            <span>Redo</span><span class="sc">Ctrl+Y</span>
+          </button>
+          <div class="sep" role="separator"></div>
           <button type="button" class="mi" role="menuitem" data-testid="copy" onclick={() => select(copyImage)} disabled={busy}>
             <span>Copy image</span><span class="sc">Ctrl+C</span>
           </button>
@@ -727,6 +830,7 @@
       onpointermove={onPointerMove}
       onpointerup={endStroke}
       onpointercancel={endStroke}
+      onpointerleave={onPointerLeave}
     ></canvas>
   </div>
 
