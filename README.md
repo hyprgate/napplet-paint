@@ -1,3 +1,9 @@
+<!-- HYPRGATE NAPPLET MIRROR NOTICE:START -->
+> This repository is a read-only mirror of the `paint` napplet from `hyprgate/gui`.
+> Open issues and pull requests in https://github.com/hyprgate/gui.
+> Do not push commits to this standalone napplet repository; direct changes are overwritten by Hyprgate's mirror workflow.
+<!-- HYPRGATE NAPPLET MIRROR NOTICE:END -->
+
 # @hyprgate/napp-paint
 
 A classic MS Paint-style doodling canvas napplet for the hyprgate shell.
@@ -59,6 +65,15 @@ gallery (`src/lib/paint-store.ts`).
 > cannot save, and NAP-UPLOAD/Blossom is not yet wired into the shell — when it
 > is, `paint-store.ts` is the single seam to swap the backend for durable,
 > multi-device image storage.
+
+## Paja runtime
+
+```bash
+pnpm --filter @hyprgate/napp-paint paja
+```
+
+This starts Kehto Paja and the napplet's Vite dev server together, using
+the port configured in `vite.config.ts`.
 
 ## Develop
 
