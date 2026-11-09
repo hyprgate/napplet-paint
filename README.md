@@ -4,17 +4,22 @@
 > Do not push commits to this standalone napplet repository; direct changes are overwritten by Hyprgate's mirror workflow.
 <!-- HYPRGATE NAPPLET MIRROR NOTICE:END -->
 
-# @hyprgate/napp-paint
+# Paint
 
-A classic MS Paint-style doodling canvas napplet for the hyprgate shell.
+A classic MS Paint-style doodling canvas for Hyprgate.
+
+Package: `@hyprgate/napp-paint`. Source lives in the Hyprgate monorepo at `napplets/paint`. The
+standalone `hyprgate/napplet-paint` repository is a generated, read-only mirror, so send changes
+to `hyprgate/web`.
 
 ## Drawing toolbar
 
-- **Pencil** — freehand drawing in the selected color and brush size.
-- **Eraser** — paints back to the white background.
-- **Fill** — flood-fills the contiguous region under the cursor.
-- **Palette** — classic color swatches plus a native color picker.
-- **Brush sizes** — 1 / 2 / 4 / 8 / 16 px.
+- **Pencil** (`P`) — freehand drawing in the selected color and brush size.
+- **Eraser** (`E`) — paints back to the white background.
+- **Fill** (`F`) — flood-fills the contiguous region under the cursor.
+- **Undo / Redo** — the same history as the Edit menu.
+- **Brush sizes** — 1 / 2 / 4 / 8 / 16 px, each showing its real thickness.
+- **Palette** — classic color swatches plus a native color picker, with the current color's hex.
 
 ## Menu bar
 
@@ -28,6 +33,9 @@ keyboard-accessible WAI-ARIA `menubar`:
   clipboard as a PNG; Paste composites a clipboard image over the current artwork,
   centered under the cursor (or the canvas center when pasted from the menu).
 - **Image** — Clear Image.
+- **Help** — Keyboard shortcuts (`?`).
+
+**New** and opening a saved doodle ask first when there are unsaved changes.
 
 Undo/redo is in-memory only and keeps the last 10 steps. Each freehand stroke,
 fill, paste, and **Clear Image** is one step; opening **New** or a saved doodle
@@ -45,6 +53,9 @@ resets the history.
 Saving an unsaved doodle (or **Save As…**) opens a modal name dialog rather than
 a persistent footer field; an already-named doodle re-saves in place. The dialog
 is a native `<dialog>` (focus-trapped, `Esc` to cancel, `Enter` to confirm).
+
+Don't use a `<form>` here: the app sandbox is `allow-scripts` without `allow-forms`, so a
+submit event never fires. Use a button `onclick` and an `Enter` handler on the input.
 
 Keyboard support: `Tab` reaches the bar, `←`/`→` move between menus, `↓`/`Enter`/
 `Space` open a menu, `↑`/`↓`/`Home`/`End` move between items, `Enter` activates,
@@ -69,7 +80,7 @@ gallery (`src/lib/paint-store.ts`).
 ## Paja runtime
 
 ```bash
-pnpm --filter @hyprgate/napp-paint paja
+pnpm --filter ./napplets/paint paja
 ```
 
 This starts Kehto Paja and the napplet's Vite dev server together, using
@@ -78,10 +89,10 @@ the port configured in `vite.config.ts`.
 ## Develop
 
 ```bash
-pnpm --filter @hyprgate/napp-paint dev          # standalone dev server (port 5192)
-pnpm --filter @hyprgate/napp-paint test         # unit tests (flood fill + store)
-pnpm --filter @hyprgate/napp-paint type-check
-pnpm --filter @hyprgate/napp-paint build
+pnpm --filter ./napplets/paint dev          # standalone dev server (port 5192)
+pnpm --filter ./napplets/paint test         # unit tests
+pnpm --filter ./napplets/paint type-check
+pnpm --filter ./napplets/paint build
 ```
 
 The shell registers this napplet as the builtin `paint` (manifest `d` tag

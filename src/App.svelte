@@ -25,6 +25,21 @@
     '#7092be', '#c8bfe7',
   ];
   const BRUSH_SIZES = [1, 2, 4, 8, 16];
+  const TOOLS: Array<{ id: Tool; label: string; glyph: string; key: string }> = [
+    { id: 'pencil', label: 'Pencil', glyph: '✎', key: 'P' },
+    { id: 'eraser', label: 'Eraser', glyph: '⌫', key: 'E' },
+    { id: 'fill', label: 'Fill', glyph: '▣', key: 'F' },
+  ];
+  const SHORTCUTS: Array<[string, string]> = [
+    ['Pencil, Eraser, Fill', 'P, E, F'],
+    ['Undo', 'Ctrl+Z'],
+    ['Redo', 'Ctrl+Y or Ctrl+Shift+Z'],
+    ['Save', 'Ctrl+S'],
+    ['Export as PNG', 'Ctrl+E'],
+    ['Copy image', 'Ctrl+C'],
+    ['Paste image', 'Ctrl+V'],
+    ['This list', '?'],
+  ];
 
   let canvas = $state<HTMLCanvasElement | null>(null);
   let ctx: CanvasRenderingContext2D | null = null;
@@ -34,6 +49,12 @@
   let nameInput = $state<HTMLInputElement | null>(null);
   let dialogName = $state('');
   let forkOnSave = false;
+
+  // Asked before New or Open would throw away unsaved work. Anything drawn since the
+  // last save can't come back: undo history resets with the document.
+  let discardDialog = $state<HTMLDialogElement | null>(null);
+  let pendingDiscard: (() => void) | null = null;
+  let shortcutsDialog = $state<HTMLDialogElement | null>(null);
 
   // Upload-result modal: shows the shell-returned URI for copy after NAP-UPLOAD.
   // `uploadSupported` gates the menu item — it stays false until the shell
@@ -123,6 +144,27 @@
     name = '';
     dirty = false;
     notify('New canvas');
+  }
+
+  function unlessUnsaved(action: () => void): void {
+    if (!dirty) {
+      action();
+      return;
+    }
+    pendingDiscard = action;
+    discardDialog?.showModal();
+  }
+
+  function confirmDiscard(): void {
+    const action = pendingDiscard;
+    pendingDiscard = null;
+    discardDialog?.close();
+    action?.();
+  }
+
+  function cancelDiscard(): void {
+    pendingDiscard = null;
+    discardDialog?.close();
   }
 
   function clearArtwork(): void {
@@ -225,6 +267,7 @@
     if (!ctx) return;
     event.preventDefault();
     closeMenu();
+    message = null;
     try {
       canvas?.setPointerCapture(event.pointerId);
     } catch {
@@ -322,8 +365,10 @@
     void tick().then(() => nameInput?.select());
   }
 
-  async function confirmSave(event: Event): Promise<void> {
-    event.preventDefault();
+  // Buttons and a key handler, never a form: `allow-scripts` without `allow-forms`
+  // blocks submission, so a form's submit event would never fire.
+  async function confirmSave(): Promise<void> {
+    if (busy) return;
     name = dialogName.trim();
     if (forkOnSave) currentId = null;
     saveDialog?.close();
@@ -332,6 +377,12 @@
 
   function cancelSave(): void {
     saveDialog?.close();
+  }
+
+  function onNameKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    void confirmSave();
   }
 
   async function load(meta: DoodleMeta): Promise<void> {
@@ -706,6 +757,17 @@
     if (event.key === 'Escape' && openMenu) {
       closeMenu();
     }
+    if (event.ctrlKey || event.metaKey || event.altKey || openMenu) return;
+    if (document.querySelector('dialog[open]')) return;
+    const el = event.target as HTMLElement | null;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+    if (event.key === '?') {
+      event.preventDefault();
+      shortcutsDialog?.showModal();
+      return;
+    }
+    const picked = TOOLS.find((candidate) => candidate.key === event.key.toUpperCase());
+    if (picked) tool = picked.id;
   }
 </script>
 
@@ -738,7 +800,7 @@
 
       {#if openMenu === 'file'}
         <div class="menu" role="menu" aria-label="File" tabindex="-1" data-menu-panel="file" onkeydown={onPanelKeydown}>
-          <button type="button" class="mi" role="menuitem" data-testid="new" onclick={() => select(newCanvas)} disabled={busy}>
+          <button type="button" class="mi" role="menuitem" data-testid="new" onclick={() => select(() => unlessUnsaved(newCanvas))} disabled={busy}>
             <span>New</span>
           </button>
           <button type="button" class="mi" role="menuitem" data-testid="save" onclick={() => select(requestSave)} disabled={busy}>
@@ -779,7 +841,7 @@
                   role="menuitem"
                   data-testid="chip-load"
                   title={meta.name}
-                  onclick={() => select(() => load(meta))}
+                  onclick={() => select(() => unlessUnsaved(() => void load(meta)))}
                   disabled={busy}
                 >
                   {currentId === meta.id ? '● ' : ''}{meta.name}
@@ -866,35 +928,93 @@
       {/if}
     </div>
 
-    <span class="brand">paint</span>
-    {#if dirty}<span class="dirty" title="Unsaved changes">●</span>{/if}
+    <div class="menu-wrap">
+      <button
+        type="button"
+        class="top"
+        class:open={openMenu === 'help'}
+        role="menuitem"
+        aria-haspopup="menu"
+        aria-expanded={openMenu === 'help'}
+        data-menu="help"
+        tabindex={activeTop === 3 ? 0 : -1}
+        onclick={() => toggleMenu('help')}
+        onkeydown={(e) => onTopKeydown(e, 'help', 3)}
+        onfocus={() => (activeTop = 3)}
+        onmouseenter={() => openMenu && (openMenu = 'help')}
+      >
+        Help
+      </button>
+
+      {#if openMenu === 'help'}
+        <div class="menu" role="menu" aria-label="Help" tabindex="-1" data-menu-panel="help" onkeydown={onPanelKeydown}>
+          <button type="button" class="mi" role="menuitem" data-testid="shortcuts" onclick={() => select(() => shortcutsDialog?.showModal())}>
+            <span>Keyboard shortcuts</span><span class="sc">?</span>
+          </button>
+        </div>
+      {/if}
+    </div>
+
+    <div class="doc-state">
+      <span class="doc-name" title={name || 'Untitled'}>{name || 'Untitled'}</span>
+      <span class="doc-flag" class:unsaved={dirty} data-paint-doc-state>{dirty ? 'Unsaved changes' : currentId ? 'Saved' : 'Nothing to save yet'}</span>
+    </div>
   </div>
 
   <header class="bar">
     <div class="group" role="group" aria-label="Tools">
-      <button class:active={tool === 'pencil'} onclick={() => (tool = 'pencil')} title="Pencil">✎ Pencil</button>
-      <button class:active={tool === 'eraser'} onclick={() => (tool = 'eraser')} title="Eraser">⌫ Eraser</button>
-      <button class:active={tool === 'fill'} onclick={() => (tool = 'fill')} title="Fill bucket">▣ Fill</button>
+      {#each TOOLS as item (item.id)}
+        <button
+          type="button"
+          class:active={tool === item.id}
+          aria-pressed={tool === item.id}
+          onclick={() => (tool = item.id)}
+          title={`${item.label} (${item.key})`}
+        ><span aria-hidden="true">{item.glyph}</span> {item.label}</button>
+      {/each}
+    </div>
+
+    <div class="group" role="group" aria-label="History">
+      <button type="button" onclick={undo} disabled={!canUndo} data-testid="toolbar-undo" aria-label="Undo" title="Undo (Ctrl+Z)"><span aria-hidden="true">↶</span></button>
+      <button type="button" onclick={redo} disabled={!canRedo} data-testid="toolbar-redo" aria-label="Redo" title="Redo (Ctrl+Y)"><span aria-hidden="true">↷</span></button>
     </div>
 
     <div class="group" role="group" aria-label="Brush size">
       {#each BRUSH_SIZES as size (size)}
-        <button class:active={brushSize === size} onclick={() => (brushSize = size)} title={`${size}px brush`}>{size}</button>
+        <button
+          type="button"
+          class="size"
+          class:active={brushSize === size}
+          aria-pressed={brushSize === size}
+          aria-label={`${size} pixel brush`}
+          onclick={() => (brushSize = size)}
+          title={`${size}px brush`}
+        >
+          <span class="size-dot" style={`width:${size}px;height:${size}px`} aria-hidden="true"></span>
+          <span class="size-num" aria-hidden="true">{size}</span>
+        </button>
       {/each}
     </div>
 
     <div class="group colors" role="group" aria-label="Colors">
-      <input type="color" bind:value={color} title="Pick a color" aria-label="Current color" />
-      {#each PALETTE as swatch (swatch)}
-        <button
-          class="swatch"
-          class:active={color.toLowerCase() === swatch}
-          style={`background:${swatch}`}
-          onclick={() => (color = swatch)}
-          title={swatch}
-          aria-label={`Color ${swatch}`}
-        ></button>
-      {/each}
+      <label class="current-color" title="Pick any color">
+        <input type="color" bind:value={color} aria-label="Current color" />
+        <span class="current-hex" data-paint-color>{color}</span>
+      </label>
+      <div class="swatches">
+        {#each PALETTE as swatch (swatch)}
+          <button
+            type="button"
+            class="swatch"
+            class:active={color.toLowerCase() === swatch}
+            style={`background:${swatch}`}
+            aria-pressed={color.toLowerCase() === swatch}
+            onclick={() => (color = swatch)}
+            title={swatch}
+            aria-label={`Color ${swatch}`}
+          ></button>
+        {/each}
+      </div>
     </div>
   </header>
 
@@ -917,13 +1037,14 @@
     {#if message}
       <span class="msg" class:error={message.kind === 'error'}>{message.text}</span>
     {:else}
-      <span class="msg">{currentId ? `Saved as “${name || 'Untitled'}”` : 'Unsaved doodle'}</span>
+      <span class="msg">{TOOLS.find((item) => item.id === tool)?.label}{tool === 'fill' ? '' : `, ${brushSize} px`}</span>
     {/if}
+    <span class="hint">Press ? for shortcuts</span>
     <span class="dims">{WIDTH} × {HEIGHT}</span>
   </footer>
 
   <dialog class="save-dialog" bind:this={saveDialog}>
-    <form method="dialog" onsubmit={confirmSave}>
+    <div class="dlg-body">
       <h2 class="dlg-title">{forkOnSave ? 'Save a copy' : 'Save doodle'}</h2>
       <label class="dlg-field">
         <span>File name</span>
@@ -935,18 +1056,45 @@
           bind:value={dialogName}
           maxlength="60"
           aria-label="Doodle name"
+          onkeydown={onNameKeydown}
         />
       </label>
       <div class="dlg-actions">
         <button type="button" class="dlg-btn" onclick={cancelSave}>Cancel</button>
-        <button type="submit" class="dlg-btn primary" data-testid="save-confirm" disabled={busy}>Save</button>
+        <button type="button" class="dlg-btn primary" data-testid="save-confirm" disabled={busy} onclick={() => void confirmSave()}>Save</button>
       </div>
-    </form>
+    </div>
+  </dialog>
+
+  <dialog class="save-dialog" bind:this={discardDialog} data-testid="discard-dialog" oncancel={cancelDiscard}>
+    <div class="dlg-body">
+      <h2 class="dlg-title">Discard unsaved changes?</h2>
+      <p class="dlg-hint">What you've drawn since the last save will be gone, and undo can't bring it back.</p>
+      <div class="dlg-actions">
+        <button type="button" class="dlg-btn" data-testid="discard-cancel" onclick={cancelDiscard}>Keep drawing</button>
+        <button type="button" class="dlg-btn danger" data-testid="discard-confirm" onclick={confirmDiscard}>Discard</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="save-dialog" bind:this={shortcutsDialog} data-testid="shortcuts-dialog">
+    <div class="dlg-body">
+      <h2 class="dlg-title">Keyboard shortcuts</h2>
+      <dl class="shortcuts">
+        {#each SHORTCUTS as [action, keys] (action)}
+          <dt>{action}</dt>
+          <dd>{keys}</dd>
+        {/each}
+      </dl>
+      <div class="dlg-actions">
+        <button type="button" class="dlg-btn" onclick={() => shortcutsDialog?.close()}>Close</button>
+      </div>
+    </div>
   </dialog>
 
   <dialog class="upload-dialog" bind:this={uploadDialog} data-testid="upload-dialog">
     <h2 class="dlg-title">Image uploaded</h2>
-    <p class="dlg-hint">Copy this link to share or paste into another napplet.</p>
+    <p class="dlg-hint">Copy this link to share it or paste it into another app.</p>
     <div class="url-row">
       <input
         class="url"
@@ -1008,7 +1156,10 @@
   .top:hover,
   .top:focus-visible {
     background: color-mix(in srgb, var(--hg-accent, #9ee493) 14%, transparent);
-    outline: none;
+  }
+  .top:focus-visible {
+    outline: 2px solid var(--hg-accent, #9ee493);
+    outline-offset: -2px;
   }
   .top.open {
     background: color-mix(in srgb, var(--hg-accent, #9ee493) 20%, transparent);
@@ -1121,28 +1272,44 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: 8px 16px;
     padding: 8px 10px;
     border-bottom: 1px solid var(--hg-border, #303030);
     background: var(--hg-surface, #101010);
   }
 
-  .brand {
+  .doc-state {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
     margin-left: auto;
-    color: var(--hg-accent, #9ee493);
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    min-width: 0;
+    padding-left: 12px;
+  }
+
+  .doc-name {
+    min-width: 0;
+    overflow: hidden;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .doc-flag {
+    flex: none;
+    font-size: 11px;
+    color: var(--hg-text-muted, #b8b1a4);
+  }
+
+  .doc-flag.unsaved {
+    color: var(--hg-accent-cyan, #82d8f7);
   }
 
   .group {
     display: flex;
     align-items: center;
     gap: 4px;
-    padding-right: 8px;
-    border-right: 1px solid var(--hg-border, #303030);
   }
-  .group:last-child { border-right: none; }
 
   .bar button {
     border: 1px solid var(--hg-border, #303030);
@@ -1155,29 +1322,82 @@
     line-height: 1.2;
   }
   .bar button:hover:not(:disabled) { border-color: var(--hg-accent, #9ee493); }
-  .bar button:disabled { opacity: 0.5; cursor: default; }
+  .bar button:disabled { opacity: 0.4; cursor: default; }
+  .bar button:focus-visible {
+    outline: 2px solid var(--hg-accent, #9ee493);
+    outline-offset: 1px;
+  }
   .bar button.active {
     border-color: var(--hg-accent, #9ee493);
     color: var(--hg-accent, #9ee493);
-    background: color-mix(in srgb, var(--hg-accent, #9ee493) 14%, transparent);
+    background: color-mix(in srgb, var(--hg-accent, #9ee493) 22%, transparent);
+    font-weight: 700;
   }
 
-  .colors { flex-wrap: wrap; }
-  .colors input[type='color'] {
-    width: 28px;
-    height: 24px;
+  /* The dot shows how thick the line will be, at the real pixel size. */
+  .bar button.size {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 2px;
+    width: 34px;
+    height: 36px;
+    padding: 2px;
+  }
+  .size-dot {
+    flex: none;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .size-num {
+    font-size: 10px;
+    line-height: 1;
+  }
+
+  .colors {
+    gap: 10px;
+  }
+  .current-color {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+  }
+  .current-color input[type='color'] {
+    width: 36px;
+    height: 36px;
     padding: 0;
-    border: 1px solid var(--hg-border, #303030);
+    border: 2px solid var(--hg-text, #f3f1e8);
+    border-radius: 4px;
     background: none;
     cursor: pointer;
   }
-  .swatch {
+  .current-color input[type='color']:focus-visible {
+    outline: 2px solid var(--hg-accent, #9ee493);
+    outline-offset: 2px;
+  }
+  .current-hex {
+    width: 7ch;
+    font-size: 11px;
+    color: var(--hg-text-muted, #b8b1a4);
+  }
+  .swatches {
+    display: grid;
+    grid-template-columns: repeat(10, 18px);
+    gap: 3px;
+  }
+  .bar button.swatch {
     width: 18px;
     height: 18px;
     padding: 0;
     border-radius: 2px;
   }
-  .swatch.active { outline: 2px solid var(--hg-accent, #9ee493); outline-offset: 1px; }
+  .bar button.swatch.active {
+    border-color: var(--hg-surface, #101010);
+    outline: 2px solid var(--hg-text, #f3f1e8);
+    outline-offset: 1px;
+  }
 
   /* ---- Status bar ------------------------------------------------------ */
   .statusbar {
@@ -1189,10 +1409,15 @@
     background: var(--hg-surface, #101010);
   }
 
-  .dirty { color: var(--hg-accent-cyan, #82d8f7); }
   .msg { color: var(--hg-text-muted, #b8b1a4); }
   .msg.error { color: var(--hg-danger, #ff6b6b); }
-  .dims { margin-left: auto; color: var(--hg-text-muted, #b8b1a4); }
+  .hint {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--hg-text-muted, #b8b1a4);
+    opacity: 0.8;
+  }
+  .dims { color: var(--hg-text-muted, #b8b1a4); }
 
   /* ---- Save dialog ----------------------------------------------------- */
   .save-dialog,
@@ -1210,7 +1435,7 @@
   .upload-dialog::backdrop {
     background: rgba(0, 0, 0, 0.55);
   }
-  .save-dialog form,
+  .dlg-body,
   .upload-dialog[open] {
     display: flex;
     flex-direction: column;
@@ -1288,6 +1513,28 @@
   }
   .dlg-btn:hover:not(:disabled) {
     border-color: var(--hg-accent, #9ee493);
+  }
+  .dlg-btn:focus-visible {
+    outline: 2px solid var(--hg-accent, #9ee493);
+    outline-offset: 1px;
+  }
+  .dlg-btn.danger {
+    border-color: var(--hg-danger, #ff6b6b);
+    color: var(--hg-danger, #ff6b6b);
+  }
+  .shortcuts {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 6px 16px;
+    margin: 0;
+    font-size: 12px;
+  }
+  .shortcuts dt {
+    color: var(--hg-text-muted, #b8b1a4);
+  }
+  .shortcuts dd {
+    margin: 0;
+    text-align: right;
   }
   .dlg-btn:disabled {
     opacity: 0.5;
